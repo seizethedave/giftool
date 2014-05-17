@@ -7,6 +7,14 @@ class GifReader
 {
    File input;
 
+   this(ref File input)
+   {
+      this.input = input;
+      this.ReadHeader();
+      this.ReadGlobalColorTable();
+      this.ReadGraphicsControlExtension();
+   }
+
    public string signature;
    public string gifVersion;
 
@@ -19,16 +27,6 @@ class GifReader
    public ubyte colorResolution;
    public ubyte sortFlag;
    public ubyte colorTableSize;
-
-   public ubyte[] globalColorTable;
-
-   this(ref File input)
-   {
-      this.input = input;
-      this.ReadHeader();
-      this.ReadGlobalColorTable();
-      this.ReadGraphicsControlExtension();
-   }
 
    private void ReadHeader()
    {
@@ -57,17 +55,24 @@ class GifReader
       this.aspectRatio = screen[6];
    }
 
+   public ulong globalColorTableOffset;
+   public ubyte[] globalColorTable;
+
    private void ReadGlobalColorTable()
    {
       if (this.colorTableFlag == 0)
       {
          // There is no global color table.
+         this.globalColorTableOffset = 0L;
          return;
       }
 
+      this.globalColorTableOffset = this.input.tell();
       this.globalColorTable.length = 3 * this.GlobalColorCount;
       this.input.rawRead(this.globalColorTable);
    }
+
+   public ulong graphicsControlExtensionOffset;
 
    public ubyte extensionIntroducer;
    public ubyte graphicControlLabel;
@@ -84,6 +89,8 @@ class GifReader
 
    private void ReadGraphicsControlExtension()
    {
+      this.graphicsControlExtensionOffset = this.input.tell();
+
       ubyte[8] extension;
       this.input.rawRead(extension);
 
@@ -155,6 +162,7 @@ void main()
    */
 
    writefln("\nGraphics Control Extension:");
+   writefln("GCE offset: 0x%X", reader.graphicsControlExtensionOffset);
    writefln("Extension intro: 0x%X", reader.extensionIntroducer);
    writefln("Graphic control label: 0x%X", reader.graphicControlLabel);
    writefln("Block byte size: %d", reader.blockByteSize);
