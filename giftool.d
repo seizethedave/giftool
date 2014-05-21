@@ -3,56 +3,100 @@
 import std.stdio;
 import std.conv;
 
+enum GifBlockType
+{
+   Header,
+   GlobalColorTable,
+   GraphicsControlExtension
+}
+
+alias void function(GifBlockType, void*) GifCallback;
+
+struct HeaderBlock
+{
+   string signature;
+   string gifVersion;
+
+   ushort canvasWidth;
+   ushort canvasHeight;
+   ubyte bgColorIndex;
+   ubyte aspectRatio;
+
+   ubyte colorTableFlag;
+   ubyte colorResolution;
+   ubyte sortFlag;
+   ubyte colorTableSize;
+
+   @property
+   public uint GlobalColorCount()
+   {
+      return 2 ^^ (this.colorTableSize + 1);
+   }
+}
+
+/+
+
+   Gradually reads through given file and calls back as it encounters sections
+   of the GIF.
+
+ +/
 class GifReader
 {
    File input;
+   GifCallback callback;
 
-   this(ref File input)
+   this(ref File input, GifCallback callback)
    {
       this.input = input;
+
+      if (callback == null)
+      {
+         callback = (type, dataPtr)
+         {
+            writefln("Encountered block of type %u", type);
+         };
+      }
+
+      this.callback = callback;
+
       this.ReadHeader();
       this.ReadGlobalColorTable();
       this.ReadGraphicsControlExtension();
    }
 
-   public string signature;
-   public string gifVersion;
-
-   public ushort canvasWidth;
-   public ushort canvasHeight;
-   public ubyte bgColorIndex;
-   public ubyte aspectRatio;
-
-   public ubyte colorTableFlag;
-   public ubyte colorResolution;
-   public ubyte sortFlag;
-   public ubyte colorTableSize;
+   private HeaderBlock* header;
 
    private void ReadHeader()
    {
+      HeaderBlock headerBlock;
+
       char[3] sig;
       this.input.rawRead(sig);
-      this.signature = to!string(sig);
+      headerBlock.signature = to!string(sig);
 
       char[3] vers;
       this.input.rawRead(vers);
-      this.gifVersion = to!string(vers);
+      headerBlock.gifVersion = to!string(vers);
 
       // Logical screen descriptor.
       ubyte[7] screen;
       this.input.rawRead(screen);
 
-      this.canvasWidth = cast(ushort) (screen[1] << 8 | screen[0]);
-      this.canvasHeight = cast(ushort) (screen[3] << 8 | screen[2]);
+      headerBlock.canvasWidth = cast(ushort) (screen[1] << 8 | screen[0]);
+      headerBlock.canvasHeight = cast(ushort) (screen[3] << 8 | screen[2]);
 
       ubyte packed = screen[4];
-      this.colorTableFlag =  (0b10000000 & packed) >> 7;
-      this.colorResolution = (0b01110000 & packed) >> 4;
-      this.sortFlag =        (0b00001000 & packed) >> 3;
-      this.colorTableSize =  (0b00000111 & packed);
+      headerBlock.colorTableFlag =  (0b10000000 & packed) >> 7;
+      headerBlock.colorResolution = (0b01110000 & packed) >> 4;
+      headerBlock.sortFlag =        (0b00001000 & packed) >> 3;
+      headerBlock.colorTableSize =  (0b00000111 & packed);
 
-      this.bgColorIndex = screen[5];
-      this.aspectRatio = screen[6];
+      headerBlock.bgColorIndex = screen[5];
+      headerBlock.aspectRatio = screen[6];
+
+      this.header = &headerBlock;
+
+      this.callback(GifBlockType.Header, &headerBlock);
    }
 
    public ulong globalColorTableOffset;
@@ -60,7 +104,7 @@ class GifReader
 
    private void ReadGlobalColorTable()
    {
-      if (this.colorTableFlag == 0)
+      if (this.header.colorTableFlag == 0)
       {
          // There is no global color table.
          this.globalColorTableOffset = 0L;
@@ -68,7 +112,7 @@ class GifReader
       }
 
       this.globalColorTableOffset = this.input.tell();
-      this.globalColorTable.length = 3 * this.GlobalColorCount;
+      this.globalColorTable.length = 3 * this.header.GlobalColorCount;
       this.input.rawRead(this.globalColorTable);
    }
 
@@ -110,17 +154,11 @@ class GifReader
    }
 
    @property
-   public uint GlobalColorCount()
-   {
-      return 2 ^^ (this.colorTableSize + 1);
-   }
-
-   @property
    public uint[] GlobalColors()
    {
       uint[] colors;
 
-      for (int i = 0; i < this.GlobalColorCount * 3; i += 3)
+      for (int i = 0; i < this.header.GlobalColorCount * 3; i += 3)
       {
          ubyte red = this.globalColorTable[i + 0];
          ubyte green = this.globalColorTable[i + 1];
@@ -133,22 +171,31 @@ class GifReader
    }
 }
 
+void FoundBlock(GifBlockType blockType, void* data)
+{
+   switch (blockType)
+   {
+      case GifBlockType.Header:
+      HeaderBlock* header = cast(HeaderBlock*)(data);
+      writefln("%s %s", header.signature, header.gifVersion);
+
+      writefln("Dimensions: %d x %d", header.canvasWidth, header.canvasHeight);
+
+      writefln("Global color table flag: %d", header.colorTableFlag);
+      writefln("Color resolution: 0b%b (%d bits/pixel)", header.colorResolution,
+       header.colorResolution + 1);
+      writefln("Sort flag: %d", header.sortFlag);
+      writefln("Global color table size: %d (%d)",
+       header.colorTableSize, header.GlobalColorCount);
+      writefln("BG color index: %d", header.bgColorIndex);
+      writefln("Pixel aspect ratio: %d", header.aspectRatio);
+      break;
+   }
+}
+
 void main()
 {
-   auto reader = new GifReader(stdin);
-
-   writefln("%s %s", reader.signature, reader.gifVersion);
-
-   writefln("Dimensions: %d x %d", reader.canvasWidth, reader.canvasHeight);
-
-   writefln("Global color table flag: %d", reader.colorTableFlag);
-   writefln("Color resolution: 0b%b (%d bits/pixel)", reader.colorResolution,
-    reader.colorResolution + 1);
-   writefln("Sort flag: %d", reader.sortFlag);
-   writefln("Global color table size: %d (%d)",
-    reader.colorTableSize, reader.GlobalColorCount);
-   writefln("BG color index: %d", reader.bgColorIndex);
-   writefln("Pixel aspect ratio: %d", reader.aspectRatio);
+   auto reader = new GifReader(stdin, &FoundBlock);
 
    writefln("Size of GCT buffer: %d", reader.globalColorTable.length);
 
