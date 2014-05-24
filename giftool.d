@@ -10,7 +10,7 @@ enum GifBlockType
    GraphicsControlExtension
 }
 
-alias void function(GifBlockType, void*) GifCallback;
+alias void function(GifBlockType, ulong, ulong, void*) GifCallback;
 
 struct HeaderBlock
 {
@@ -34,11 +34,30 @@ struct HeaderBlock
    }
 }
 
-/+
+struct GlobalColorTableBlock
+{
+   ubyte[] table;
+}
 
+struct GraphicsControlExtensionBlock
+{
+   ubyte extensionIntroducer;
+   ubyte graphicControlLabel;
+   ubyte blockByteSize;
+
+   ubyte reserved;
+   ubyte disposalMethod;
+   bool userInputFlag;
+   bool transparentColorFlag;
+
+   ushort delayTime;
+   ubyte transparentColorIndex;
+   ubyte blockTerminator;
+}
+
+/+
    Gradually reads through given file and calls back as it encounters sections
    of the GIF.
-
  +/
 class GifReader
 {
@@ -51,7 +70,8 @@ class GifReader
 
       if (callback == null)
       {
-         callback = (type, dataPtr)
+         // Default callback when not provided.
+         callback = (type, start, end, dataPtr)
          {
             writefln("Encountered block of type %u", type);
          };
@@ -65,10 +85,13 @@ class GifReader
    }
 
    private HeaderBlock* header;
+   public GlobalColorTableBlock* globalColorTable;
 
    private void ReadHeader()
    {
       HeaderBlock headerBlock;
+
+      ulong start = this.input.tell();
 
       char[3] sig;
       this.input.rawRead(sig);
@@ -96,61 +119,59 @@ class GifReader
 
       this.header = &headerBlock;
 
-      this.callback(GifBlockType.Header, &headerBlock);
-   }
+      ulong end = this.input.tell();
 
-   public ulong globalColorTableOffset;
-   public ubyte[] globalColorTable;
+      this.callback(GifBlockType.Header, start, end, &headerBlock);
+   }
 
    private void ReadGlobalColorTable()
    {
       if (this.header.colorTableFlag == 0)
       {
          // There is no global color table.
-         this.globalColorTableOffset = 0L;
+         this.globalColorTable = null;
          return;
       }
 
-      this.globalColorTableOffset = this.input.tell();
-      this.globalColorTable.length = 3 * this.header.GlobalColorCount;
-      this.input.rawRead(this.globalColorTable);
+      ulong start = this.input.tell();
+
+      GlobalColorTableBlock globalColorTable;
+      globalColorTable.table.length = 3 * this.header.GlobalColorCount;
+      this.input.rawRead(globalColorTable.table);
+
+      ulong end = this.input.tell();
+
+      this.callback(GifBlockType.GlobalColorTable, start, end,
+       &globalColorTable);
    }
-
-   public ulong graphicsControlExtensionOffset;
-
-   public ubyte extensionIntroducer;
-   public ubyte graphicControlLabel;
-   public ubyte blockByteSize;
-
-   public ubyte reserved;
-   public ubyte disposalMethod;
-   public bool userInputFlag;
-   public bool transparentColorFlag;
-
-   public ushort delayTime;
-   public ubyte transparentColorIndex;
-   public ubyte blockTerminator;
 
    private void ReadGraphicsControlExtension()
    {
-      this.graphicsControlExtensionOffset = this.input.tell();
+      GraphicsControlExtensionBlock extension;
 
-      ubyte[8] extension;
-      this.input.rawRead(extension);
+      ulong start = this.input.tell();
 
-      this.extensionIntroducer = extension[0];
-      this.graphicControlLabel = extension[1];
-      this.blockByteSize = extension[2];
+      ubyte[8] data;
+      this.input.rawRead(data);
 
-      ubyte packed = extension[3];
-      this.reserved =             (0b11100000 & packed) >> 5;
-      this.disposalMethod =       (0b00011100 & packed) >> 2;
-      this.userInputFlag =        (0b00000010 & packed) >> 1;
-      this.transparentColorFlag = (0b00000001 & packed);
+      extension.extensionIntroducer = data[0];
+      extension.graphicControlLabel = data[1];
+      extension.blockByteSize = data[2];
 
-      this.delayTime = (extension[4] << 8) | extension[5];
-      this.transparentColorIndex = extension[6];
-      this.blockTerminator = extension[7];
+      ubyte packed = data[3];
+      extension.reserved =             (0b11100000 & packed) >> 5;
+      extension.disposalMethod =       (0b00011100 & packed) >> 2;
+      extension.userInputFlag =        (0b00000010 & packed) >> 1;
+      extension.transparentColorFlag = (0b00000001 & packed);
+
+      extension.delayTime = (data[4] << 8) | data[5];
+      extension.transparentColorIndex = data[6];
+      extension.blockTerminator = data[7];
+
+      ulong end = this.input.tell();
+
+      this.callback(GifBlockType.GraphicsControlExtension, start, end,
+       &extension);
    }
 
    @property
@@ -158,11 +179,13 @@ class GifReader
    {
       uint[] colors;
 
+      auto table = this.globalColorTable.table;
+
       for (int i = 0; i < this.header.GlobalColorCount * 3; i += 3)
       {
-         ubyte red = this.globalColorTable[i + 0];
-         ubyte green = this.globalColorTable[i + 1];
-         ubyte blue = this.globalColorTable[i + 2];
+         ubyte red = table[i + 0];
+         ubyte green = table[i + 1];
+         ubyte blue = table[i + 2];
 
          colors ~= (red << 16) | (green << 8) | blue;
       }
@@ -171,8 +194,10 @@ class GifReader
    }
 }
 
-void FoundBlock(GifBlockType blockType, void* data)
+void FoundBlock(GifBlockType blockType, ulong start, ulong end, void* data)
 {
+   writefln("Block type %d countered (0x%X-0x%X)", blockType, start, end);
+
    switch (blockType)
    {
       case GifBlockType.Header:
@@ -190,14 +215,35 @@ void FoundBlock(GifBlockType blockType, void* data)
       writefln("BG color index: %d", header.bgColorIndex);
       writefln("Pixel aspect ratio: %d", header.aspectRatio);
       break;
+
+      case GifBlockType.GlobalColorTable:
+
+      break;
+
+      case GifBlockType.GraphicsControlExtension:
+      GraphicsControlExtensionBlock* block =
+       cast(GraphicsControlExtensionBlock*)(data);
+      writefln("\nGraphics Control Extension:");
+      writefln("Extension intro: 0x%X", block.extensionIntroducer);
+      writefln("Graphic control label: 0x%X", block.graphicControlLabel);
+      writefln("Block byte size: %d", block.blockByteSize);
+      writefln("'reserved': %d", block.reserved);
+      writefln("Disposal method: %d", block.disposalMethod);
+      writefln("User input flag %d", block.userInputFlag);
+      writefln("Transparent color flag: %d", block.transparentColorFlag);
+      writefln("Delay time: %d", block.delayTime);
+      writefln("Transparent color index: %d", block.transparentColorIndex);
+      writefln("Block teminator: %d", block.blockTerminator);
+      break;
+
+      default:
+      break;
    }
 }
 
 void main()
 {
    auto reader = new GifReader(stdin, &FoundBlock);
-
-   writefln("Size of GCT buffer: %d", reader.globalColorTable.length);
 
    /*
    writefln("Colors:");
@@ -207,18 +253,5 @@ void main()
       writefln("\t#%x", color);
    }
    */
-
-   writefln("\nGraphics Control Extension:");
-   writefln("GCE offset: 0x%X", reader.graphicsControlExtensionOffset);
-   writefln("Extension intro: 0x%X", reader.extensionIntroducer);
-   writefln("Graphic control label: 0x%X", reader.graphicControlLabel);
-   writefln("Block byte size: %d", reader.blockByteSize);
-   writefln("'reserved': %d", reader.reserved);
-   writefln("Disposal method: %d", reader.disposalMethod);
-   writefln("User input flag %d", reader.userInputFlag);
-   writefln("Transparent color flag: %d", reader.transparentColorFlag);
-   writefln("Delay time: %d", reader.delayTime);
-   writefln("Transparent color index: %d", reader.transparentColorIndex);
-   writefln("Block teminator: %d", reader.blockTerminator);
 }
 
