@@ -2,6 +2,7 @@
 
 import std.stdio;
 import std.conv;
+import std.getopt;
 
 enum GifBlockType
 {
@@ -10,7 +11,7 @@ enum GifBlockType
    GraphicsControlExtension
 }
 
-alias void function(GifBlockType, ulong, ulong, void*) GifCallback;
+alias void function(GifBlockType, size_t, size_t, void*) GifCallback;
 
 struct HeaderBlock
 {
@@ -91,7 +92,7 @@ class GifReader
    {
       HeaderBlock headerBlock;
 
-      ulong start = this.input.tell();
+      size_t start = this.input.tell();
 
       char[3] sig;
       this.input.rawRead(sig);
@@ -119,7 +120,7 @@ class GifReader
 
       this.header = &headerBlock;
 
-      ulong end = this.input.tell();
+      size_t end = this.input.tell();
 
       this.callback(GifBlockType.Header, start, end, &headerBlock);
    }
@@ -133,13 +134,13 @@ class GifReader
          return;
       }
 
-      ulong start = this.input.tell();
+      size_t start = this.input.tell();
 
       GlobalColorTableBlock globalColorTable;
       globalColorTable.table.length = 3 * this.header.GlobalColorCount;
       this.input.rawRead(globalColorTable.table);
 
-      ulong end = this.input.tell();
+      size_t end = this.input.tell();
 
       this.callback(GifBlockType.GlobalColorTable, start, end,
        &globalColorTable);
@@ -149,7 +150,7 @@ class GifReader
    {
       GraphicsControlExtensionBlock extension;
 
-      ulong start = this.input.tell();
+      size_t start = this.input.tell();
 
       ubyte[8] data;
       this.input.rawRead(data);
@@ -168,7 +169,7 @@ class GifReader
       extension.transparentColorIndex = data[6];
       extension.blockTerminator = data[7];
 
-      ulong end = this.input.tell();
+      size_t end = this.input.tell();
 
       this.callback(GifBlockType.GraphicsControlExtension, start, end,
        &extension);
@@ -194,9 +195,15 @@ class GifReader
    }
 }
 
-void FoundBlock(GifBlockType blockType, ulong start, ulong end, void* data)
+void FoundBlock(GifBlockType blockType, size_t start, size_t end, void* data)
 {
-   writefln("Block type %d countered (0x%X-0x%X)", blockType, start, end);
+   writefln("Block type %s from 0x%X to 0x%X (length 0x%X)",
+    blockType, start, end, end-start);
+
+   if (!verbose)
+   {
+      return;
+   }
 
    switch (blockType)
    {
@@ -241,17 +248,26 @@ void FoundBlock(GifBlockType blockType, ulong start, ulong end, void* data)
    }
 }
 
-void main()
+bool showHelp = false;
+bool verbose = false;
+
+void main(string[] args)
 {
-   auto reader = new GifReader(stdin, &FoundBlock);
+   getopt(args,
+    "help|h", &showHelp,
+    "verbose|v", &verbose);
 
-   /*
-   writefln("Colors:");
-
-   foreach (color; reader.GlobalColors)
+   if (showHelp)
    {
-      writefln("\t#%x", color);
+      writefln("giftool");
+      writefln("Usage:");
+      writefln("--help -h: Show help.");
+      writefln("--verbose -v: Show more stuff.");
+      writefln("\nExamples:");
+      writefln("\t./giftool < joker1.gif");
+      writefln("\t./giftool --verbose < joker1.gif");
+      return;
    }
-   */
-}
 
+   auto reader = new GifReader(stdin, &FoundBlock);
+}
