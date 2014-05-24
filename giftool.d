@@ -244,6 +244,7 @@ void FoundBlock(GifBlockType blockType, size_t start, size_t end, void* data)
       break;
 
       default:
+      static assert(false);
       break;
    }
 }
