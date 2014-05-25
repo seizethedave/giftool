@@ -59,6 +59,25 @@ struct GraphicsControlExtensionBlock
 /+
    Gradually reads through given file and calls back as it encounters sections
    of the GIF.
+
+   GIF89a grammar excerpt:
+
+   <GIF Data Stream> ::=     Header <Logical Screen> <Data>* Trailer
+
+   <Logical Screen> ::=      Logical Screen Descriptor [Global Color Table]
+
+   <Data> ::=                <Graphic Block>  |
+                             <Special-Purpose Block>
+
+   <Graphic Block> ::=   [Graphic Control Extension] <Graphic-Rendering Block>
+
+   <Graphic-Rendering Block> ::=  <Table-Based Image>  |
+                                  Plain Text Extension
+
+   <Table-Based Image> ::=   Image Descriptor [Local Color Table] Image Data
+
+   <Special-Purpose Block> ::=    Application Extension  |
+                                  Comment Extension
  +/
 class GifReader
 {
@@ -82,7 +101,22 @@ class GifReader
 
       this.ReadHeader();
       this.ReadGlobalColorTable();
+
+      bool didReadBlock;
+
+      /+
+      do
+      {
+         didReadBlock = this.ReadNextBlock();
+      } while (didReadBlock);
+      +/
+
       this.ReadGraphicsControlExtension();
+   }
+
+   private bool ReadNextBlock()
+   {
+      return false;
    }
 
    private HeaderBlock* header;
@@ -197,8 +231,8 @@ class GifReader
 
 void FoundBlock(GifBlockType blockType, size_t start, size_t end, void* data)
 {
-   writefln("Block type %s from 0x%X to 0x%X (length 0x%X)",
-    blockType, start, end, end-start);
+   writefln("Block type %s from 0x%X to 0x%X (length 0x%X bytes)",
+    blockType, start, end, (end - start) / 8);
 
    if (!verbose)
    {
@@ -208,7 +242,7 @@ void FoundBlock(GifBlockType blockType, size_t start, size_t end, void* data)
    switch (blockType)
    {
       case GifBlockType.Header:
-      HeaderBlock* header = cast(HeaderBlock*)(data);
+      auto header = cast(HeaderBlock*)(data);
       writefln("%s %s", header.signature, header.gifVersion);
 
       writefln("Dimensions: %d x %d", header.canvasWidth, header.canvasHeight);
@@ -228,8 +262,7 @@ void FoundBlock(GifBlockType blockType, size_t start, size_t end, void* data)
       break;
 
       case GifBlockType.GraphicsControlExtension:
-      GraphicsControlExtensionBlock* block =
-       cast(GraphicsControlExtensionBlock*)(data);
+      auto block = cast(GraphicsControlExtensionBlock*)(data);
       writefln("\nGraphics Control Extension:");
       writefln("Extension intro: 0x%X", block.extensionIntroducer);
       writefln("Graphic control label: 0x%X", block.graphicControlLabel);
@@ -244,7 +277,7 @@ void FoundBlock(GifBlockType blockType, size_t start, size_t end, void* data)
       break;
 
       default:
-      static assert(false);
+      assert(false, "Invalid GifBlockType.");
       break;
    }
 }
