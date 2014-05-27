@@ -425,7 +425,7 @@ class GifReader
 void FoundBlock(GifBlockType blockType, size_t start, size_t end, void* data)
 {
    writefln("Block type %s from 0x%X to 0x%X (length 0x%X bytes)",
-    blockType, start, end, (end - start) / 8);
+    blockType, start, end, end - start);
 
    if (!verbose)
    {
